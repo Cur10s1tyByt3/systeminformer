@@ -16,12 +16,14 @@
 #define PH_CM_ORDER_LIMIT 160
 
 // begin_phapppub
-typedef LONG (NTAPI *PPH_CM_POST_SORT_FUNCTION)(
+typedef _Function_class_(PH_CM_POST_SORT_FUNCTION)
+LONG NTAPI PH_CM_POST_SORT_FUNCTION(
     _In_ LONG Result,
     _In_ PVOID Node1,
     _In_ PVOID Node2,
     _In_ PH_SORT_ORDER SortOrder
     );
+typedef PH_CM_POST_SORT_FUNCTION* PPH_CM_POST_SORT_FUNCTION;
 // end_phapppub
 
 typedef struct _PH_CM_MANAGER
@@ -68,7 +70,7 @@ PPH_CM_COLUMN PhCmCreateColumn(
 
 PPH_CM_COLUMN PhCmFindColumn(
     _In_ PPH_CM_MANAGER Manager,
-    _In_ PPH_STRINGREF PluginName,
+    _In_ PCPH_STRINGREF PluginName,
     _In_ ULONG SubId
     );
 
@@ -99,7 +101,7 @@ BOOLEAN
 NTAPI
 PhCmLoadSettings(
     _In_ HWND TreeNewHandle,
-    _In_ PPH_STRINGREF Settings
+    _In_ PCPH_STRINGREF Settings
     );
 // end_phapppub
 
@@ -109,8 +111,8 @@ BOOLEAN PhCmLoadSettingsEx(
     _In_ HWND TreeNewHandle,
     _In_opt_ PPH_CM_MANAGER Manager,
     _In_ ULONG Flags,
-    _In_ PPH_STRINGREF Settings,
-    _In_opt_ PPH_STRINGREF SortSettings
+    _In_ PCPH_STRINGREF Settings,
+    _In_opt_ PCPH_STRINGREF SortSettings
     );
 
 // begin_phapppub

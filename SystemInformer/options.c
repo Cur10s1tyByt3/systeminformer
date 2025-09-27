@@ -353,7 +353,7 @@ INT_PTR CALLBACK PhOptionsDialogProc(
                 PhOptionsOnSize();
             }
 
-            if (PhGetIntegerPairSetting(L"OptionsWindowPosition").X)
+            if (PhValidWindowPlacementFromSetting(L"OptionsWindowPosition"))
                 PhLoadWindowPlacementFromSetting(L"OptionsWindowPosition", L"OptionsWindowSize", hwndDlg);
             else
                 PhCenterWindow(hwndDlg, PhMainWndHandle);
@@ -392,6 +392,8 @@ INT_PTR CALLBACK PhOptionsDialogProc(
     case WM_DPICHANGED:
         {
             PhpOptionsSetImageList(OptionsTreeControl, TRUE);
+            PhLayoutManagerUpdate(&WindowLayoutManager, LOWORD(wParam));
+            PhOptionsOnSize();
         }
         break;
     case WM_SIZE:
@@ -627,7 +629,8 @@ VOID PhOptionsLayoutSectionView(
     {
         RECT clientRect;
 
-        GetClientRect(ContainerControl, &clientRect);
+        if (!PhGetClientRect(ContainerControl, &clientRect))
+            return;
 
         SetWindowPos(
             CurrentSection->DialogHandle,
@@ -782,6 +785,7 @@ typedef struct _PHP_HKURUN_ENTRY
     //PPH_STRING Name;
 } PHP_HKURUN_ENTRY, *PPHP_HKURUN_ENTRY;
 
+_Function_class_(PH_ENUM_KEY_CALLBACK)
 BOOLEAN NTAPI PhpReadCurrentRunCallback(
     _In_ HANDLE RootDirectory,
     _In_ PKEY_VALUE_FULL_INFORMATION Information,
@@ -1664,6 +1668,18 @@ static VOID PhpAdvancedPageSave(
         RestartRequired = TRUE;
     }
 
+    // When changing driver enabled setting, it only makes sense to require a restart if we're
+    // already elevated. If we're not elevated and asked to restart, we would not connect to the
+    // driver and the user has to elevate (restart) again anyway. (jxy-s)
+    if (PhGetOwnTokenAttributes().Elevated)
+    {
+        SetSettingForLvItemCheckRestartRequired(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_DRIVER, L"KsiEnable");
+    }
+    else
+    {
+        SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_DRIVER, L"KsiEnable");
+    }
+
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_SINGLE_INSTANCE, L"AllowOnlyOneInstance");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_HIDE_WHENCLOSED, L"HideOnClose");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_HIDE_WHENMINIMIZED, L"HideOnMinimize");
@@ -1671,7 +1687,6 @@ static VOID PhpAdvancedPageSave(
     SetSettingForLvItemCheckRestartRequired(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_MINIINFO_WINDOW, L"MiniInfoWindowEnabled");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_MEMSTRINGS_TREE, L"EnableMemStringsTreeDialog");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_LASTTAB_SUPPORT, L"MainWindowTabRestoreEnabled");
-    SetSettingForLvItemCheckRestartRequired(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_DRIVER, L"KsiEnable");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_WARNINGS, L"EnableWarnings");
     SetSettingForLvItemCheckRestartRequired(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_PLUGINS, L"EnablePlugins");
     SetSettingForLvItemCheck(listViewHandle, PHP_OPTIONS_INDEX_ENABLE_UNDECORATE_SYMBOLS, L"DbgHelpUndecorate");
@@ -1868,8 +1883,11 @@ INT_PTR CALLBACK PhpOptionsGeneralDlgProc(
             PhDeleteLayoutManager(&LayoutManager);
         }
         break;
-    case WM_DPICHANGED:
+    case WM_DPICHANGED_AFTERPARENT:
         {
+            PhLayoutManagerUpdate(&LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&LayoutManager);
+
             PhpOptionsSetImageList(ListViewHandle, FALSE);
         }
         break;
@@ -2245,6 +2263,12 @@ static INT_PTR CALLBACK PhpOptionsAdvancedEditDlgProc(
             PhDeleteLayoutManager(&LayoutManager);
         }
         break;
+    case WM_DPICHANGED_AFTERPARENT:
+        {
+            PhLayoutManagerUpdate(&LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&LayoutManager);
+        }
+        break;
     case WM_SIZE:
         {
             PhLayoutManagerLayout(&LayoutManager);
@@ -2449,6 +2473,7 @@ VOID OptionsAdvancedSetOptionsTreeList(
     }
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN OptionsAdvancedNodeHashtableEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -2460,6 +2485,7 @@ BOOLEAN OptionsAdvancedNodeHashtableEqualFunction(
     return PhEqualStringRef(&node1->Name->sr, &node2->Name->sr, TRUE);
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 ULONG OptionsAdvancedNodeHashtableHashFunction(
     _In_ PVOID Entry
     )
@@ -3086,6 +3112,12 @@ INT_PTR CALLBACK PhpOptionsAdvancedDlgProc(
             PhRemoveWindowContext(hwndDlg, PH_WINDOW_CONTEXT_DEFAULT);
         }
         break;
+    case WM_DPICHANGED_AFTERPARENT:
+        {
+            PhLayoutManagerUpdate(&context->LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&context->LayoutManager);
+        }
+        break;
     case WM_SIZE:
         {
             PhLayoutManagerLayout(&context->LayoutManager);
@@ -3427,6 +3459,12 @@ INT_PTR CALLBACK PhpOptionsHighlightingDlgProc(
             PhDeleteLayoutManager(&LayoutManager);
         }
         break;
+    case WM_DPICHANGED_AFTERPARENT:
+        {
+            PhLayoutManagerUpdate(&LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&LayoutManager);
+        }
+        break;
     case WM_SIZE:
         {
             PhLayoutManagerLayout(&LayoutManager);
@@ -3685,6 +3723,12 @@ INT_PTR CALLBACK PhpOptionsGraphsDlgProc(
             }
 
             PhDeleteLayoutManager(&LayoutManager);
+        }
+        break;
+    case WM_DPICHANGED_AFTERPARENT:
+        {
+            PhLayoutManagerUpdate(&LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&LayoutManager);
         }
         break;
     case WM_SIZE:

@@ -40,6 +40,8 @@ static PPH_STRING KsiSupportString = NULL;
 static BOOLEAN KsiEnableLoadNative = FALSE;
 static BOOLEAN KsiEnableLoadFilter = FALSE;
 static PPH_STRING KsiServiceName = NULL;
+static PPH_STRING KsiFileName = NULL;
+static PPH_STRING KsiObjectName = NULL;
 
 #ifdef DEBUG
 //#define KSI_DEBUG_DELAY_SPLASHSCREEN 1
@@ -122,11 +124,13 @@ PCWSTR KsiGetWindowsVersionString(
         return L"Windows 11 23H2";
     case WINDOWS_11_24H2:
         return L"Windows 11 24H2";
+    case WINDOWS_11_25H2:
+        return L"Windows 11 25H2";
     case WINDOWS_NEW:
         return L"Windows Insider Preview";
     }
 
-    static_assert(WINDOWS_MAX == WINDOWS_11_24H2, "KsiGetWindowsVersionString must include all versions");
+    static_assert(WINDOWS_MAX == WINDOWS_11_25H2, "KsiGetWindowsVersionString must include all versions");
 
     return L"Windows";
 }
@@ -301,7 +305,7 @@ VOID PhShowKsiStatus(
             ))
         {
             PhEnableKsiWarnings = FALSE;
-            PhSetIntegerSetting(L"KsiEnableWarnings", FALSE);
+            PhSetIntegerSetting(SETTING_KSI_ENABLE_WARNINGS, FALSE);
         }
 
         PhDereferenceObject(infoString);
@@ -461,7 +465,7 @@ LONG PhpShowKsiMessage(
         if (checked)
         {
             PhEnableKsiWarnings = FALSE;
-            PhSetIntegerSetting(L"KsiEnableWarnings", FALSE);
+            PhSetIntegerSetting(SETTING_KSI_ENABLE_WARNINGS, FALSE);
         }
     }
 
@@ -670,7 +674,7 @@ PPH_STRING PhGetKsiServiceName(
 {
     PPH_STRING string;
 
-    string = PhGetStringSetting(L"KsiServiceName");
+    string = PhGetStringSetting(SETTING_KSI_SERVICE_NAME);
 
     if (PhIsNullOrEmptyString(string))
     {
@@ -831,7 +835,7 @@ CleanupExit:
     return status;
 }
 
-PPH_STRING PhGetKsiDirectory(
+PPH_STRING PhGetKsiFileName(
     VOID
     )
 {
@@ -1009,10 +1013,7 @@ VOID KsiConnect(
         goto CleanupExit;
     }
 
-    if (!(ksiFileName = PhGetKsiDirectory()))
-        goto CleanupExit;
-
-    if (!PhDoesFileExistWin32(PhGetString(ksiFileName)))
+    if (!PhDoesFileExistWin32(PhGetString(KsiFileName)))
     {
         PhShowKsiMessageEx(
             WindowHandle,
@@ -1025,31 +1026,29 @@ VOID KsiConnect(
         goto CleanupExit;
     }
 
-    if (PhIsNullOrEmptyString(objectName = PhGetStringSetting(L"KsiObjectName")))
-        PhMoveReference(&objectName, PhCreateString(KPH_OBJECT_NAME));
-    if (PhIsNullOrEmptyString(portName = PhGetStringSetting(L"KsiPortName")))
+    if (PhIsNullOrEmptyString(portName = PhGetStringSetting(SETTING_KSI_PORT_NAME)))
         PhClearReference(&portName);
-    if (PhIsNullOrEmptyString(altitude = PhGetStringSetting(L"KsiAltitude")))
+    if (PhIsNullOrEmptyString(altitude = PhGetStringSetting(SETTING_KSI_ALTITUDE)))
         PhClearReference(&altitude);
 
-    config.FileName = &ksiFileName->sr;
+    config.FileName = &KsiFileName->sr;
     config.ServiceName = &KsiServiceName->sr;
-    config.ObjectName = &objectName->sr;
+    config.ObjectName = &KsiObjectName->sr;
     config.PortName = (portName ? &portName->sr : NULL);
     config.Altitude = (altitude ? &altitude->sr : NULL);
     config.FsSupportedFeatures = 0;
-    if (!!PhGetIntegerSetting(L"KsiEnableFsFeatureOffloadRead"))
+    if (!!PhGetIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_OFFLOAD_READ))
         SetFlag(config.FsSupportedFeatures, SUPPORTED_FS_FEATURES_OFFLOAD_READ);
-    if (!!PhGetIntegerSetting(L"KsiEnableFsFeatureOffloadWrite"))
+    if (!!PhGetIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_OFFLOAD_WRITE))
         SetFlag(config.FsSupportedFeatures, SUPPORTED_FS_FEATURES_OFFLOAD_WRITE);
-    if (!!PhGetIntegerSetting(L"KsiEnableFsFeatureQueryOpen"))
+    if (!!PhGetIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_QUERY_OPEN))
         SetFlag(config.FsSupportedFeatures, SUPPORTED_FS_FEATURES_QUERY_OPEN);
-    if (!!PhGetIntegerSetting(L"KsiEnableFsFeatureBypassIO"))
+    if (!!PhGetIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_BYPASS_IO))
         SetFlag(config.FsSupportedFeatures, SUPPORTED_FS_FEATURES_BYPASS_IO);
     config.Flags.Flags = 0;
-    config.Flags.DisableImageLoadProtection = !!PhGetIntegerSetting(L"KsiDisableImageLoadProtection");
-    config.Flags.RandomizedPoolTag = !!PhGetIntegerSetting(L"KsiRandomizedPoolTag");
-    config.Flags.DynDataNoEmbedded = !!PhGetIntegerSetting(L"KsiDynDataNoEmbedded");
+    config.Flags.DisableImageLoadProtection = !!PhGetIntegerSetting(SETTING_KSI_DISABLE_IMAGE_LOAD_PROTECTION);
+    config.Flags.RandomizedPoolTag = !!PhGetIntegerSetting(SETTING_KSI_RANDOMIZED_POOL_TAG);
+    config.Flags.DynDataNoEmbedded = !!PhGetIntegerSetting(SETTING_KSI_DYN_DATA_NO_EMBEDDED);
     config.EnableNativeLoad = KsiEnableLoadNative;
     config.EnableFilterLoad = KsiEnableLoadFilter;
     config.Callback = KsiCommsCallback;
@@ -1083,7 +1082,7 @@ VOID KsiConnect(
         // existing temporary driver file, if one exists.
         //
 
-        tempFileName = PhGetStringSetting(L"KsiPreviousTemporaryDriverFile");
+        tempFileName = PhGetStringSetting(SETTING_KSI_PREVIOUS_TEMPORARY_DRIVER_FILE);
         if (tempFileName)
         {
             if (PhDoesFileExistWin32(PhGetString(tempFileName)))
@@ -1093,20 +1092,20 @@ VOID KsiConnect(
                 status = KphConnect(&config);
             }
 
-            PhDereferenceObject(tempFileName);
+            PhMoveReference(&KsiFileName, tempFileName);
         }
 
         if (!NT_SUCCESS(status) && tempDriverDir)
         {
             if (NT_SUCCESS(status = KsiCreateTemporaryDriverFile(ksiFileName, tempDriverDir, &tempFileName)))
             {
-                PhSetStringSetting(L"KsiPreviousTemporaryDriverFile", PhGetString(tempFileName));
+                PhSetStringSetting(SETTING_KSI_PREVIOUS_TEMPORARY_DRIVER_FILE, PhGetString(tempFileName));
 
                 config.FileName = &tempFileName->sr;
 
                 status = KphConnect(&config);
 
-                PhDereferenceObject(tempFileName);
+                PhMoveReference(&KsiFileName, tempFileName);
             }
         }
     }
@@ -1144,10 +1143,10 @@ VOID KsiConnect(
         config.PortName = &randomPortName->sr;
         config.ObjectName = &randomObjectName->sr;
 
+        PhMoveReference(&KsiServiceName, PhReferenceObject(randomServiceName));
+        PhMoveReference(&KsiObjectName, PhReferenceObject(randomObjectName));
         KsiEnableLoadNative = TRUE;
         KsiEnableLoadFilter = FALSE;
-        PhDereferenceObject(KsiServiceName);
-        KsiServiceName = PhReferenceObject(randomServiceName);
 
         status = KphConnect(&config);
 
@@ -1158,11 +1157,11 @@ VOID KsiConnect(
             // clients to successfully connect or unload the natively loaded
             // driver.
             //
-            PhSetIntegerSetting(L"KsiEnableLoadNative", TRUE);
-            PhSetIntegerSetting(L"KsiEnableLoadFilter", FALSE);
-            PhSetStringSetting2(L"KsiServiceName", &randomServiceName->sr);
-            PhSetStringSetting2(L"KsiPortName", &randomPortName->sr);
-            PhSetStringSetting2(L"KsiObjectName", &randomObjectName->sr);
+            PhSetIntegerSetting(SETTING_KSI_ENABLE_LOAD_NATIVE, TRUE);
+            PhSetIntegerSetting(SETTING_KSI_ENABLE_LOAD_FILTER, FALSE);
+            PhSetStringSetting2(SETTING_KSI_SERVICE_NAME, &randomServiceName->sr);
+            PhSetStringSetting2(SETTING_KSI_PORT_NAME, &randomPortName->sr);
+            PhSetStringSetting2(SETTING_KSI_OBJECT_NAME, &randomObjectName->sr);
 
             PhSaveSettings2(PhSettingsFileName);
 
@@ -1234,10 +1233,10 @@ VOID KsiConnect(
         ACCESS_MASK process = 0;
         ACCESS_MASK thread = 0;
 
-        if (PhGetIntegerSetting(L"KsiEnableUnloadProtection"))
+        if (PhGetIntegerSetting(SETTING_KSI_ENABLE_UNLOAD_PROTECTION))
             KphAcquireDriverUnloadProtection(NULL, NULL);
 
-        switch (PhGetIntegerSetting(L"KsiClientProcessProtectionLevel"))
+        switch (PhGetIntegerSetting(SETTING_KSI_CLIENT_PROCESS_PROTECTION_LEVEL))
         {
         case 2:
             process |= (PROCESS_VM_READ | PROCESS_QUERY_INFORMATION);
@@ -1434,11 +1433,14 @@ VOID PhInitializeKsi(
     KphInitialize();
     PhInformerInitialize();
 
+    KsiFileName = PhGetKsiFileName();
     KsiServiceName = PhGetKsiServiceName();
-    KsiEnableLoadNative = !!PhGetIntegerSetting(L"KsiEnableLoadNative");
-    KsiEnableLoadFilter = !!PhGetIntegerSetting(L"KsiEnableLoadFilter");
+    if (PhIsNullOrEmptyString(KsiObjectName = PhGetStringSetting(SETTING_KSI_OBJECT_NAME)))
+        PhMoveReference(&KsiObjectName, PhCreateString(KPH_OBJECT_NAME));
+    KsiEnableLoadNative = !!PhGetIntegerSetting(SETTING_KSI_ENABLE_LOAD_NATIVE);
+    KsiEnableLoadFilter = !!PhGetIntegerSetting(SETTING_KSI_ENABLE_LOAD_FILTER);
 
-    if (PhGetIntegerSetting(L"KsiEnableSplashScreen"))
+    if (PhGetIntegerSetting(SETTING_KSI_ENABLE_SPLASH_SCREEN))
         KsiShowInitializingSplashScreen();
     else
         KsiInitializeCallbackThread(NULL);
@@ -1455,10 +1457,10 @@ NTSTATUS PhCleanupKsi(
     if (!KphCommsIsConnected())
         return STATUS_SUCCESS;
 
-    if (PhGetIntegerSetting(L"KsiEnableUnloadProtection"))
+    if (PhGetIntegerSetting(SETTING_KSI_ENABLE_UNLOAD_PROTECTION))
         KphReleaseDriverUnloadProtection(NULL, NULL);
 
-    if (PhGetIntegerSetting(L"KsiUnloadOnExit"))
+    if (PhGetIntegerSetting(SETTING_KSI_UNLOAD_ON_EXIT))
     {
         ULONG clientCount;
 
@@ -1480,7 +1482,9 @@ NTSTATUS PhCleanupKsi(
     if (!shouldUnload)
         return STATUS_SUCCESS;
 
+    config.FileName = &KsiFileName->sr;
     config.ServiceName = &KsiServiceName->sr;
+    config.ObjectName = &KsiObjectName->sr;
     config.EnableNativeLoad = KsiEnableLoadNative;
     config.EnableFilterLoad = KsiEnableLoadFilter;
     status = KphServiceStop(&config);

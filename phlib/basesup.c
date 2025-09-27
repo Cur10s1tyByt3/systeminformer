@@ -144,12 +144,14 @@ NTSTATUS PhBaseInitialization(
     PhStringType = PhCreateObjectType(L"String", 0, NULL);
     PhBytesType = PhCreateObjectType(L"Bytes", 0, NULL);
 
+    memset(&parameters, 0, sizeof(PH_OBJECT_TYPE_PARAMETERS));
     parameters.FreeListSize = sizeof(PH_LIST);
     parameters.FreeListCount = 128;
 
     PhListType = PhCreateObjectTypeEx(L"List", PH_OBJECT_TYPE_USE_FREE_LIST, PhpListDeleteProcedure, &parameters);
     PhPointerListType = PhCreateObjectType(L"PointerList", 0, PhpPointerListDeleteProcedure);
 
+    memset(&parameters, 0, sizeof(PH_OBJECT_TYPE_PARAMETERS));
     parameters.FreeListSize = sizeof(PH_HASHTABLE);
     parameters.FreeListCount = 64;
 
@@ -183,6 +185,7 @@ NTSTATUS PhpBaseThreadStart(
     PhFreeToFreeList(&PhpBaseThreadContextFreeList, Parameter);
 
 #ifdef DEBUG
+    memset(&dbg, 0, sizeof(PHP_BASE_THREAD_DBG));
     dbg.ClientId = NtCurrentTeb()->ClientId;
     dbg.StartAddress = context.StartAddress;
     dbg.Parameter = context.Parameter;
@@ -444,6 +447,7 @@ NTSTATUS PhCreateThread2(
     return status;
 }
 
+_Function_class_(TP_CALLBACK_ROUTINE)
 VOID PhpBaseThreadQueueStart(
     _Inout_ PTP_CALLBACK_INSTANCE Instance,
     _In_ _Frees_ptr_ PVOID Context
@@ -490,36 +494,99 @@ NTSTATUS PhQueueUserWorkItem(
 }
 
 /**
+ *  Calibrate and return TSC frequency in Hz (cycles per second)
+ *
+ *  Example usage:
+ *  double tsc_freq = PhReadTimeStampFrequency();
+ *  dprintf("TSC frequency: %.3f MHz\n", tsc_freq / 1e6);
+ *  // Example: measure a code region
+ *  _mm_lfence();
+ *  uint64_t t0 = __rdtsc();
+ *  // ... code to measure ...
+ *  for (volatile int i = 0; i < 1000000; ++i) {}
+ *  _mm_lfence();
+ *  uint64_t t1 = __rdtsc();
+ *  uint64_t cycles = t1 - t0;
+ *  double seconds = (double)cycles / tsc_freq;
+ *  double nanoseconds = seconds * 1e9;
+ *  dprintf("Elapsed: %llu cycles, %.6f seconds, %.0f ns\n", cycles, seconds, nanoseconds);
+ **/
+DOUBLE PhReadTimeStampFrequency(
+    VOID
+    )
+{
+    LARGE_INTEGER qpc_freq;
+    LARGE_INTEGER qpc_start;
+    LARGE_INTEGER qpc_end;
+    ULONG_PTR old_affinity = 0;
+    DOUBLE elapsed_qpc;
+    ULONG64 elapsed_tsc;
+    DOUBLE tsc_freq;
+    ULONG64 tsc_start;
+    ULONG64 tsc_end;
+
+    PhQueryPerformanceFrequency(&qpc_freq);
+
+    // Wait interval (in QPC ticks)
+    const DOUBLE interval_sec = 0.1; // 100 ms
+    const LONGLONG interval_ticks = (LONGLONG)(qpc_freq.QuadPart * interval_sec);
+
+    // Warm up
+    for (volatile int i = 0; i < 1000000; ++i) {}
+
+    // Pin thread to one CPU (optional, for best accuracy)
+    PhGetThreadAffinityMask(NtCurrentThread(), &old_affinity);
+    PhSetThreadAffinityMask(NtCurrentThread(), 1);
+
+    PhQueryPerformanceCounter(&qpc_start);
+    SpeculationFence();
+    tsc_start = ReadTimeStampCounter();
+    SpeculationFence();
+
+    // Wait for interval
+    do
+    {
+        PhQueryPerformanceCounter(&qpc_end);
+    } while ((qpc_end.QuadPart - qpc_start.QuadPart) < interval_ticks);
+
+    SpeculationFence();
+    tsc_end = ReadTimeStampCounter();
+    SpeculationFence();
+
+    if (old_affinity)
+    {
+        PhSetThreadAffinityMask(NtCurrentThread(), old_affinity);
+    }
+
+    elapsed_qpc = (DOUBLE)(qpc_end.QuadPart - qpc_start.QuadPart) / qpc_freq.QuadPart;
+    elapsed_tsc = tsc_end - tsc_start;
+    tsc_freq = elapsed_tsc / elapsed_qpc;
+    return tsc_freq;
+}
+
+/**
  * Reads the time stamp counter.
  *
  * This function reads the time stamp counter using the `__rdtscp` instruction,
  * which is a serializing variant of the `rdtsc` instruction. It also includes
  * a memory fence to ensure proper ordering of memory operations.
- * @return The current value of the time stamp counter.
+ * \return The current value of the time stamp counter.
  */
-ULONGLONG PhReadTimeStampCounter(
+ULONG64 PhReadTimeStampCounter(
     VOID
     )
 {
-#if defined(PHNT_NATIVE_TIME)
-    ULONG64 value;
-
-    value = ReadTimeStampCounter();
-
-#if !defined(NTDDI_WIN11_GE) || (NTDDI_VERSION < NTDDI_WIN11_GE)
-    MemoryBarrier();
+#if defined(_M_X64) || defined(_M_IX86)
+    unsigned int aux;
+    ULONG64 value = __rdtscp(&aux);
+    SpeculationFence();
+    return value;
 #else
     SpeculationFence();
-#endif
-
-#else
-    ULONG64 value;
-    ULONG index;
-
-    value = __rdtscp(&index);
-#endif
-
+    ULONG64 value = ReadTimeStampCounter();
+    SpeculationFence();
     return value;
+#endif
 }
 
 // rev from QueryPerformanceCounter (dmex)
@@ -967,10 +1034,10 @@ PVOID PhReAllocateSafe(
     }
     if (Memory)
     {
-        return RtlReAllocateHeap(PhHeapHandle, HEAP_GENERATE_EXCEPTIONS, Memory, Size);
+        return RtlReAllocateHeap(PhHeapHandle, 0, Memory, Size);
     }
 
-    return RtlAllocateHeap(PhHeapHandle, HEAP_GENERATE_EXCEPTIONS, Size);
+    return RtlAllocateHeap(PhHeapHandle, 0, Size);
 #endif
 }
 
@@ -1236,11 +1303,11 @@ NTSTATUS PhProtectVirtualMemory(
 /**
  * Reads virtual memory from a specified process.
  *
- * @param ProcessHandle Handle to the process from which the memory is to be read.
- * @param BaseAddress Optional pointer to the base address in the specified process from which to read.
- * @param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
- * @param BufferSize Size of the buffer, in bytes.
- * @param NumberOfBytesRead Optional pointer to a variable that receives the number of bytes read into the buffer.
+ * \param ProcessHandle Handle to the process from which the memory is to be read.
+ * \param BaseAddress Optional pointer to the base address in the specified process from which to read.
+ * \param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
+ * \param BufferSize Size of the buffer, in bytes.
+ * \param NumberOfBytesRead Optional pointer to a variable that receives the number of bytes read into the buffer.
  * \return Successful or errant status.
  */
 NTSTATUS PhReadVirtualMemory(
@@ -1258,14 +1325,70 @@ NTSTATUS PhReadVirtualMemory(
             *NumberOfBytesRead = BufferSize;
         return STATUS_SUCCESS;
     }
+    NTSTATUS status;
+    SIZE_T numberOfBytesRead = 0;
 
-    return NtReadVirtualMemory(
+    status = NtReadVirtualMemory(
         ProcessHandle,
         BaseAddress,
         Buffer,
         BufferSize,
-        NumberOfBytesRead
+        &numberOfBytesRead
         );
+
+    if (NT_SUCCESS(status))
+    {
+        assert(BufferSize == numberOfBytesRead);
+    }
+
+    if (NumberOfBytesRead)
+    {
+        *NumberOfBytesRead = numberOfBytesRead;
+    }
+
+    return status;
+}
+
+/**
+ * Writes virtual memory to the specified process.
+ *
+ * \param ProcessHandle Handle to the process from which the memory is to be read.
+ * \param BaseAddress Optional pointer to the base address in the specified process from which to read.
+ * \param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
+ * \param NumberOfBytesToWrite The number of bytes to be written to the specified process.
+ * \param NumberOfBytesWritten A pointer to a variable that receives the number of bytes transferred into the specified buffer.
+ * \return Successful or errant status.
+ */
+NTSTATUS PhWriteVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _In_reads_bytes_(NumberOfBytesToWrite) PVOID Buffer,
+    _In_ SIZE_T NumberOfBytesToWrite,
+    _Out_opt_ PSIZE_T NumberOfBytesWritten
+    )
+{
+    NTSTATUS status;
+    SIZE_T numberOfBytesWritten = 0;
+
+    status = NtWriteVirtualMemory(
+        ProcessHandle,
+        BaseAddress,
+        Buffer,
+        NumberOfBytesToWrite,
+        &numberOfBytesWritten
+        );
+
+    if (NT_SUCCESS(status))
+    {
+        assert(NumberOfBytesToWrite == numberOfBytesWritten);
+    }
+
+    if (NumberOfBytesWritten)
+    {
+        *NumberOfBytesWritten = numberOfBytesWritten;
+    }
+
+    return status;
 }
 
 /**
@@ -4881,7 +5004,6 @@ VOID PhDeleteBytesBuilder(
  * resources used by the object.
  *
  * \param BytesBuilder A byte string builder object.
- *
  * \return A pointer to a byte string. You must free the byte string using PhDereferenceObject()
  * when you no longer need it.
  */

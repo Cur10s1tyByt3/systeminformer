@@ -118,43 +118,38 @@ PLDR_DATA_TABLE_ENTRY PhFindLoaderEntryNameHash(
     return NULL;
 }
 
-/*!
-    @brief PhLoadLibrary prevents the loader from searching in an unsafe
-     order by first requiring the loader try to load and resolve through
-     System32. Then upping the loading flags until the library is loaded.
-
-    @param[in] FileName - The file name of the library to load.
-
-    @return HMODULE to the library on success, null on failure.
-*/
+/**
+ * Loads the specified file into the address space of the calling process.
+ * PhLoadLibrary prevents the loader from searching in an unsafe order by first
+ * limiting the search path to \System32 or the application directory.
+ *
+ * \param[in] FileName The file name of the library to load.
+ * \return HMODULE to the library on success, null on failure.
+ */
 PVOID PhLoadLibrary(
     _In_ PCWSTR FileName
     )
 {
     PVOID baseAddress;
 
-    // Force LOAD_LIBRARY_SEARCH_SYSTEM32. If the library file name is a fully
-    // qualified path this will succeed.
+    // Force System32 as the default search path.
+    // - If the file name is not qualified this will fail.
+    // - If the file name qualified this will succeed.
+    // Note: Directories in the standard search path are not searched.
 
-    if (baseAddress = LoadLibraryEx(
-        FileName,
-        NULL,
-        LOAD_LIBRARY_SEARCH_SYSTEM32
-        ))
-    {
+    if (baseAddress = LoadLibraryEx(FileName, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32))
         return baseAddress;
-    }
 
-    // Include the application directory now.
+    // Force the current executable directory as the default search path.
+    // - If the file name is not qualified this will fail.
+    // - If the file name qualified this will succeed.
+    // Note: Directories in the standard search path are not searched.
 
-    if (baseAddress = LoadLibraryEx(
-        FileName,
-        NULL,
-        LOAD_LIBRARY_SEARCH_APPLICATION_DIR
-        ))
-    {
+    if (baseAddress = LoadLibraryEx(FileName, NULL, LOAD_LIBRARY_SEARCH_APPLICATION_DIR))
         return baseAddress;
-    }
+
+    // Windows 7, Windows 8, Windows Server 2008 R2, and Windows Server 2008
+    // don't support the above flags prior to installing KB2533623. (dmex)
 
     if (WindowsVersion < WINDOWS_8)
     {
@@ -169,6 +164,38 @@ PVOID PhLoadLibrary(
     return NULL;
 }
 
+/**
+ * Loads a library with specific flags.
+ *
+ * \param[out] BaseAddress Receives the base address of the loaded library.
+ * \param[in] FileName The file name of the library to load.
+ * \param[in] Flags Flags to control the loading behavior.
+ * \return NTSTATUS code.
+ */
+NTSTATUS PhLoadLibraryEx(
+    _Out_ PVOID* BaseAddress,
+    _In_ PCWSTR FileName,
+    _In_ ULONG Flags
+    )
+{
+    PVOID baseAddress;
+
+    if (baseAddress = LoadLibraryEx(FileName, NULL, Flags))
+    {
+        *BaseAddress = baseAddress;
+        return STATUS_SUCCESS;
+    }
+
+    *BaseAddress = NULL;
+    return PhGetLastWin32ErrorAsNtStatus();
+}
+
+/**
+ * Frees a loaded library.
+ *
+ * \param BaseAddress The base address of the library to free.
+ * \return TRUE if successful, FALSE otherwise.
+ */
 BOOLEAN PhFreeLibrary(
     _In_ PVOID BaseAddress
     )
@@ -413,26 +440,26 @@ typedef struct _PH_PROCEDURE_ADDRESS_REMOTE_CONTEXT
     PPH_STRING FileName;
 } PH_PROCEDURE_ADDRESS_REMOTE_CONTEXT, *PPH_PROCEDURE_ADDRESS_REMOTE_CONTEXT;
 
+_Function_class_(PH_ENUM_PROCESS_MODULES_LIMITED_CALLBACK)
 static NTSTATUS NTAPI PhpGetProcedureAddressRemoteLimitedCallback(
     _In_ HANDLE ProcessHandle,
     _In_ PVOID VirtualAddress,
     _In_ PVOID ImageBase,
     _In_ SIZE_T ImageSize,
     _In_ PPH_STRING FileName,
-    _In_opt_ PVOID Context
+    _In_ PPH_PROCEDURE_ADDRESS_REMOTE_CONTEXT Context
     )
 {
-    PPH_PROCEDURE_ADDRESS_REMOTE_CONTEXT context = (PPH_PROCEDURE_ADDRESS_REMOTE_CONTEXT)Context;
-
-    if (PhEqualString(FileName, context->FileName, TRUE))
+    if (PhEqualString(FileName, Context->FileName, TRUE))
     {
-        context->DllBase = ImageBase;
+        Context->DllBase = ImageBase;
         return STATUS_NO_MORE_ENTRIES;
     }
 
     return STATUS_SUCCESS;
 }
 
+_Function_class_(PH_ENUM_PROCESS_MODULES_CALLBACK)
 static BOOLEAN PhpGetProcedureAddressRemoteCallback(
     _In_ PLDR_DATA_TABLE_ENTRY Module,
     _In_ PPH_PROCEDURE_ADDRESS_REMOTE_CONTEXT Context
@@ -671,18 +698,18 @@ NTSTATUS PhLoadResource(
     )
 {
     NTSTATUS status;
-    LDR_RESOURCE_INFO resourceInfo;
     PIMAGE_RESOURCE_DATA_ENTRY resourceData = NULL;
     PVOID resourceBuffer = NULL;
     ULONG resourceLength;
-
-    resourceInfo.Type = (ULONG_PTR)Type;
-    resourceInfo.Name = (ULONG_PTR)Name;
-    resourceInfo.Language = MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL);
+    ULONG_PTR resourcePath[] = {
+        (ULONG_PTR)Type,
+        (ULONG_PTR)Name,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)
+    };
 
     __try
     {
-        status = LdrFindResource_U(DllBase, &resourceInfo, RESOURCE_DATA_LEVEL, &resourceData);
+        status = LdrFindResource_U(DllBase, resourcePath, RTL_NUMBER_OF(resourcePath), &resourceData);
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1162,7 +1189,7 @@ NTSTATUS PhGetLoaderEntryImageNtHeaders(
 NTSTATUS PhGetLoaderEntryImageEntryPoint(
     _In_ PVOID BaseAddress,
     _In_ PIMAGE_NT_HEADERS ImageNtHeader,
-    _Out_ PLDR_INIT_ROUTINE *ImageEntryPoint
+    _Out_ PDLL_INIT_ROUTINE *ImageEntryPoint
     )
 {
     if (ImageNtHeader->OptionalHeader.AddressOfEntryPoint == 0)
@@ -1234,6 +1261,9 @@ NTSTATUS PhGetLoaderEntryImageVaToSection(
     PIMAGE_SECTION_HEADER section;
     PIMAGE_SECTION_HEADER sectionHeader;
     PVOID directorySectionAddress = NULL;
+    PVOID imageSectionStart;
+    ULONG imageSectionSize;
+    PVOID imageSectionEnd;
 
     section = IMAGE_FIRST_SECTION(ImageNtHeader);
 
@@ -1241,13 +1271,22 @@ NTSTATUS PhGetLoaderEntryImageVaToSection(
     {
         sectionHeader = PTR_ADD_OFFSET(section, UInt32x32To64(IMAGE_SIZEOF_SECTION_HEADER, i));
 
+        // Note: VirtualSize is used by the loader, SizeOfRawData is used for file on disk.
+        // A .bss section in a PE file might have SizeOfRawData = 0 (since it is not stored in the file) 
+        // and VirtualSize = 4096 (the amount of memory to allocate and zero-fill).
+        // The section length must be the maximum of the two values.
+
+        imageSectionStart = PTR_ADD_OFFSET(BaseAddress, sectionHeader->VirtualAddress);
+        imageSectionSize = max(sectionHeader->Misc.VirtualSize, sectionHeader->SizeOfRawData);
+        imageSectionEnd = PTR_ADD_OFFSET(imageSectionStart, imageSectionSize);
+
         if (
-            ((ULONG_PTR)ImageDirectoryAddress >= (ULONG_PTR)PTR_ADD_OFFSET(BaseAddress, sectionHeader->VirtualAddress)) &&
-            ((ULONG_PTR)ImageDirectoryAddress < (ULONG_PTR)PTR_ADD_OFFSET(PTR_ADD_OFFSET(BaseAddress, sectionHeader->VirtualAddress), sectionHeader->SizeOfRawData))
+            ((ULONG_PTR)ImageDirectoryAddress >= (ULONG_PTR)imageSectionStart) &&
+            ((ULONG_PTR)ImageDirectoryAddress < (ULONG_PTR)imageSectionEnd)
             )
         {
-            directorySectionLength = sectionHeader->Misc.VirtualSize;
-            directorySectionAddress = PTR_ADD_OFFSET(BaseAddress, sectionHeader->VirtualAddress);
+            directorySectionLength = imageSectionSize;
+            directorySectionAddress = imageSectionStart;
             break;
         }
     }
@@ -1259,7 +1298,38 @@ NTSTATUS PhGetLoaderEntryImageVaToSection(
         return STATUS_SUCCESS;
     }
 
+    *ImageSectionAddress = NULL;
+    *ImageSectionLength = 0;
     return STATUS_SECTION_NOT_IMAGE;
+}
+
+NTSTATUS PhLoaderEntryImageRvaToFileOffset(
+    _In_ PIMAGE_NT_HEADERS ImageNtHeader,
+    _In_ ULONG Rva,
+    _Out_ PULONG Offset
+    )
+{
+    PIMAGE_SECTION_HEADER section;
+    PIMAGE_SECTION_HEADER sectionHeader;
+
+    section = IMAGE_FIRST_SECTION(ImageNtHeader);
+
+    for (USHORT i = 0; i < ImageNtHeader->FileHeader.NumberOfSections; i++)
+    {
+        sectionHeader = PTR_ADD_OFFSET(section, UInt32x32To64(IMAGE_SIZEOF_SECTION_HEADER, i));
+
+        if (
+            Rva >= sectionHeader->VirtualAddress &&
+            Rva < sectionHeader->VirtualAddress + sectionHeader->SizeOfRawData
+            )
+        {
+            *Offset = sectionHeader->PointerToRawData + (Rva - sectionHeader->VirtualAddress);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    *Offset = 0;
+    return STATUS_NOT_FOUND;
 }
 
 NTSTATUS PhLoaderEntryImageRvaToSection(
@@ -1273,6 +1343,9 @@ NTSTATUS PhLoaderEntryImageRvaToSection(
     PIMAGE_SECTION_HEADER section;
     PIMAGE_SECTION_HEADER sectionHeader;
     PIMAGE_SECTION_HEADER directorySectionHeader = NULL;
+    ULONG imageSectionAddress;
+    SIZE_T imageSectionLength;
+    PVOID imageSectionMaximum;
 
     section = IMAGE_FIRST_SECTION(ImageNtHeader);
 
@@ -1280,12 +1353,16 @@ NTSTATUS PhLoaderEntryImageRvaToSection(
     {
         sectionHeader = PTR_ADD_OFFSET(section, UInt32x32To64(IMAGE_SIZEOF_SECTION_HEADER, i));
 
+        imageSectionAddress = sectionHeader->VirtualAddress;
+        imageSectionLength = __max(sectionHeader->Misc.VirtualSize, sectionHeader->SizeOfRawData);
+        imageSectionMaximum = PTR_ADD_OFFSET(imageSectionAddress, imageSectionLength);
+
         if (
-            ((ULONG_PTR)Rva >= (ULONG_PTR)sectionHeader->VirtualAddress) &&
-            ((ULONG_PTR)Rva < (ULONG_PTR)PTR_ADD_OFFSET(sectionHeader->VirtualAddress, sectionHeader->SizeOfRawData))
+            ((ULONG_PTR)Rva >= (ULONG_PTR)imageSectionAddress) &&
+            ((ULONG_PTR)Rva < (ULONG_PTR)imageSectionMaximum)
             )
         {
-            directorySectionLength = sectionHeader->Misc.VirtualSize;
+            directorySectionLength = imageSectionLength;
             directorySectionHeader = sectionHeader;
             break;
         }
@@ -1298,6 +1375,8 @@ NTSTATUS PhLoaderEntryImageRvaToSection(
         return STATUS_SUCCESS;
     }
 
+    *ImageSection = NULL;
+    *ImageSectionLength = 0;
     return STATUS_SECTION_NOT_IMAGE;
 }
 
@@ -2312,19 +2391,17 @@ CleanupExit:
     return status;
 }
 
-NTSTATUS PhpLoaderEntryQuerySectionInformation(
+NTSTATUS PhLoaderEntryIsSectionImageExecutable(
     _In_ HANDLE SectionHandle
     )
 {
-    SECTION_IMAGE_INFORMATION section;
     NTSTATUS status;
-
-    memset(&section, 0, sizeof(SECTION_IMAGE_INFORMATION));
+    SECTION_IMAGE_INFORMATION sectionInfo;
 
     status = NtQuerySection(
         SectionHandle,
         SectionImageInformation,
-        &section,
+        &sectionInfo,
         sizeof(SECTION_IMAGE_INFORMATION),
         NULL
         );
@@ -2332,20 +2409,20 @@ NTSTATUS PhpLoaderEntryQuerySectionInformation(
     if (!NT_SUCCESS(status))
         return status;
 
-    if (section.SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_GUI)
+    if (sectionInfo.SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_GUI)
         return STATUS_INVALID_IMPORT_OF_NON_DLL;
-    if (!FlagOn(section.ImageCharacteristics, IMAGE_FILE_DLL | IMAGE_FILE_EXECUTABLE_IMAGE))
+    if (!FlagOn(sectionInfo.ImageCharacteristics, IMAGE_FILE_DLL | IMAGE_FILE_EXECUTABLE_IMAGE))
         return STATUS_INVALID_IMPORT_OF_NON_DLL;
 
 #ifdef _WIN64
-    if (section.Machine != IMAGE_FILE_MACHINE_AMD64 && section.Machine != IMAGE_FILE_MACHINE_ARM64)
+    if (sectionInfo.Machine != IMAGE_FILE_MACHINE_AMD64 && sectionInfo.Machine != IMAGE_FILE_MACHINE_ARM64)
         return STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
 #else
-    if (section.Machine != IMAGE_FILE_MACHINE_I386)
+    if (sectionInfo.Machine != IMAGE_FILE_MACHINE_I386)
         return STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
 #endif
 
-    return status;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS PhLoaderEntryRelocateImage(
@@ -2540,6 +2617,7 @@ PPH_STRING PhGetExportNameFromOrdinal(
 
 NTSTATUS PhLoaderEntryLoadDll(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_ PVOID* BaseAddress
     )
 {
@@ -2549,14 +2627,17 @@ NTSTATUS PhLoaderEntryLoadDll(
     PVOID imageBaseAddress;
     SIZE_T imageBaseSize;
 
-    status = PhCreateFile(
+    status = PhCreateFileEx(
         &fileHandle,
         FileName,
         FILE_READ_DATA | FILE_EXECUTE | SYNCHRONIZE,
+        RootDirectory,
+        NULL,
         FILE_ATTRIBUTE_NORMAL,
         FILE_SHARE_READ,
         FILE_OPEN,
-        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL
         );
 
     if (!NT_SUCCESS(status))
@@ -2576,7 +2657,7 @@ NTSTATUS PhLoaderEntryLoadDll(
     if (!NT_SUCCESS(status))
         return status;
 
-    status = PhpLoaderEntryQuerySectionInformation(
+    status = PhLoaderEntryIsSectionImageExecutable(
         sectionHandle
         );
 
@@ -2629,7 +2710,7 @@ NTSTATUS PhLoaderEntryUnloadDll(
 {
     NTSTATUS status;
     PIMAGE_NT_HEADERS imageNtHeaders;
-    PLDR_INIT_ROUTINE imageEntryRoutine;
+    PDLL_INIT_ROUTINE imageEntryRoutine;
 
     status = PhGetLoaderEntryImageNtHeaders(
         BaseAddress,
@@ -2699,13 +2780,14 @@ NTSTATUS PhLoadAllImportsForDll(
 
 NTSTATUS PhLoadPluginImage(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_opt_ PVOID *BaseAddress
     )
 {
     NTSTATUS status;
     PVOID imageBaseAddress;
     PIMAGE_NT_HEADERS imageNtHeaders;
-    PLDR_INIT_ROUTINE imageEntryRoutine;
+    PDLL_INIT_ROUTINE imageEntryRoutine;
 
 #if defined(PH_NATIVE_PLUGIN_IMAGE_LOAD)
     UNICODE_STRING imageFileName;
@@ -2727,6 +2809,7 @@ NTSTATUS PhLoadPluginImage(
 
     status = PhLoaderEntryLoadDll(
         FileName,
+        RootDirectory,
         &imageBaseAddress
         );
 #endif

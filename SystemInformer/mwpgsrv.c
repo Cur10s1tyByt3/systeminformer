@@ -34,6 +34,7 @@ static BOOLEAN ServiceTreeListLoaded = FALSE;
 static PPH_TN_FILTER_ENTRY DriverFilterEntry = NULL;
 static PPH_TN_FILTER_ENTRY MicrosoftFilterEntry = NULL;
 
+_Function_class_(PH_MAIN_TAB_PAGE_CALLBACK)
 BOOLEAN PhMwpServicesPageCallback(
     _In_ PPH_MAIN_TAB_PAGE Page,
     _In_ PH_MAIN_TAB_PAGE_MESSAGE Message,
@@ -95,14 +96,13 @@ BOOLEAN PhMwpServicesPageCallback(
         {
             PPH_MAIN_TAB_PAGE_MENU_INFORMATION menuInfo = Parameter1;
             PPH_EMENU menu;
-            ULONG startIndex;
             PPH_EMENU_ITEM menuItem;
 
-            menu = menuInfo->Menu;
-            startIndex = menuInfo->StartIndex;
+            menu = PhCreateEMenuItem(0, 0, L"Services", NULL, NULL);
+            PhInsertEMenuItem(menuInfo->Menu, menu, menuInfo->StartIndex);
 
-            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_VIEW_HIDEMICROSOFTSERVICES, L"Hide default services", NULL, NULL), startIndex);
-            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_VIEW_HIDEDRIVERSERVICES, L"&Hide driver services", NULL, NULL), startIndex + 1);
+            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_VIEW_HIDEMICROSOFTSERVICES, L"Hide default services", NULL, NULL), ULONG_MAX);
+            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_VIEW_HIDEDRIVERSERVICES, L"&Hide driver services", NULL, NULL), ULONG_MAX);
 
             if (DriverFilterEntry && (menuItem = PhFindEMenuItem(menu, 0, NULL, ID_VIEW_HIDEDRIVERSERVICES)))
                 menuItem->Flags |= PH_EMENU_CHECKED;
@@ -140,7 +140,7 @@ BOOLEAN PhMwpServicesPageCallback(
         break;
     case MainTabPageUpdateAutomaticallyChanged:
         {
-            BOOLEAN updateAutomatically = (BOOLEAN)Parameter1;
+            BOOLEAN updateAutomatically = (BOOLEAN)PtrToUlong(Parameter1);
 
             PhSetEnabledProvider(&PhMwpServiceProviderRegistration, updateAutomatically);
         }
@@ -199,6 +199,7 @@ VOID PhMwpToggleMicrosoftServiceTreeFilter(
     PhSetIntegerSetting(L"HideDefaultServices", !!MicrosoftFilterEntry);
 }
 
+_Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN PhMwpDriverServiceTreeFilter(
     _In_ PPH_TREENEW_NODE Node,
     _In_opt_ PVOID Context
@@ -212,6 +213,7 @@ BOOLEAN PhMwpDriverServiceTreeFilter(
     return TRUE;
 }
 
+_Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN PhMwpMicrosoftServiceTreeFilter(
     _In_ PPH_TREENEW_NODE Node,
     _In_opt_ PVOID Context

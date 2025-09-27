@@ -110,7 +110,7 @@ VOID PhShowMemoryEditorDialog(
 
             if (NT_SUCCESS(status))
             {
-                status = NtReadVirtualMemory(
+                status = PhReadVirtualMemory(
                     processHandle,
                     BaseAddress,
                     buffer,
@@ -280,7 +280,7 @@ INT_PTR CALLBACK PhpMemoryEditorDlgProc(
                     LONG dpiValue;
 
                     PhRectangleToRect(&rect, &windowRectangle);
-                    dpiValue = PhGetMonitorDpi(&rect);
+                    dpiValue = PhGetMonitorDpi(NULL, &rect);
 
                     windowRectangle.Size = PhGetScalableIntegerPairSetting(L"MemEditSize", TRUE, dpiValue)->Pair;
                     PhAdjustRectangleToWorkingArea(NULL, &windowRectangle);
@@ -475,7 +475,7 @@ INT_PTR CALLBACK PhpMemoryEditorDlgProc(
 
                         if (NT_SUCCESS(status))
                         {
-                            status = NtWriteVirtualMemory(
+                            status = PhWriteVirtualMemory(
                                 processHandle,
                                 context->BaseAddress,
                                 context->Buffer,
@@ -510,7 +510,7 @@ INT_PTR CALLBACK PhpMemoryEditorDlgProc(
 
                     if (NT_SUCCESS(status))
                     {
-                        status = NtReadVirtualMemory(
+                        status = PhReadVirtualMemory(
                             processHandle,
                             context->BaseAddress,
                             context->Buffer,
@@ -553,6 +553,12 @@ INT_PTR CALLBACK PhpMemoryEditorDlgProc(
                 }
                 break;
             }
+        }
+        break;
+    case WM_DPICHANGED:
+        {
+            PhLayoutManagerUpdate(&context->LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&context->LayoutManager);
         }
         break;
     case WM_SIZE:
