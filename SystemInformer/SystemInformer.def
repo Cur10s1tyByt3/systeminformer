@@ -33,6 +33,7 @@ EXPORTS
     PhCopyIListView
     PhCopyListViewInfoTip
     PhCreateKsiSettingsBlob
+    PhCreateHandleItem
     PhCreateProcessPropContext
     PhCreateProcessPropPageContext
     PhCreateProcessPropPageContextEx
@@ -169,7 +170,6 @@ EXPORTS
     PhShowChooseProcessDialog
     PhShowHandleObjectProperties1
     PhShowHandleObjectProperties2
-    PhShowHandlePropertiesEx
     PhShowIconNotification
     PhShowIconNotificationEx
     PhShowProcessAffinityDialog2
@@ -970,7 +970,6 @@ EXPORTS
 
 ; hndlinfo
     PhCallKphQueryFileInformationWithTimeout
-    PhCreateHandleItem
     PhCompareObjects
     PhEnumObjectTypes
     PhFormatNativeKeyName

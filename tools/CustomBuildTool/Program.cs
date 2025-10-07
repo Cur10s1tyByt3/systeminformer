@@ -215,8 +215,8 @@ namespace CustomBuildTool
 
                 if (!Build.BuildPdbZip(false, flags))
                     Environment.Exit(1);
-                if (!Build.BuildSymStoreZip(flags))
-                    Environment.Exit(1);
+                //if (!Build.BuildSymStoreZip(flags))
+                //    Environment.Exit(1);
                 //if (!Build.BuildSdkZip())
                 //    Environment.Exit(1);
                 //if (!Build.BuildSrcZip())
@@ -258,8 +258,8 @@ namespace CustomBuildTool
 
                 if (!Build.BuildPdbZip(true, flags))
                     Environment.Exit(1);
-                if (!Build.BuildSymStoreZip(flags))
-                    Environment.Exit(1);
+                //if (!Build.BuildSymStoreZip(flags))
+                //    Environment.Exit(1);
 
                 Build.ShowBuildStats();
             }
@@ -375,8 +375,8 @@ namespace CustomBuildTool
 
                 if (!Build.BuildPdbZip(false, flags))
                     Environment.Exit(1);
-                if (!Build.BuildSymStoreZip(flags))
-                    Environment.Exit(1);
+                //if (!Build.BuildSymStoreZip(flags))
+                //    Environment.Exit(1);
                 if (!Build.BuildChecksumsFile())
                     Environment.Exit(1);
 
@@ -389,7 +389,7 @@ namespace CustomBuildTool
             if ((Flags & BuildFlags.BuildVerbose) == 0)
                 return;
 
-            if (Build.BuildIntegrationTF)
+            if (Build.BuildIntegration)
             {
                 var colour_ansi = ToAnsiCode(Color);
 
@@ -447,7 +447,7 @@ namespace CustomBuildTool
 
             var formattedText = builder.GetFormattedText();
 
-            if (Build.BuildIntegrationTF)
+            if (Build.BuildIntegration)
             {
                 var colour_ansi = ToAnsiCode(Color);
 
